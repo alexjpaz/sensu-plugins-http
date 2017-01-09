@@ -33,6 +33,7 @@ require 'sensu-plugin/check/cli'
 require 'json'
 require 'net/http'
 require 'net/https'
+require 'uri'
 
 #
 # Check JSON
@@ -56,6 +57,7 @@ class CheckJson < Sensu::Plugin::Check::CLI
   option :timeout, short: '-t SECS', proc: proc(&:to_i), default: 15
   option :key, short: '-K KEY', long: '--key KEY'
   option :value, short: '-v VALUE', long: '--value VALUE'
+  option :redirect_limit, short: '-r redirect_limit', long: '--redirect-limit redirect_limit', default: 1, proc: proc(&:to_i)
 
   def run
     if config[:url]
@@ -125,8 +127,39 @@ class CheckJson < Sensu::Plugin::Check::CLI
     return false
   end
 
-  def acquire_resource
-    http = Net::HTTP.new(config[:host], config[:port])
+  def acquire_resource(uri=nil, limit)
+    if limit == 0 || limit.nil?
+      raise "Too many HTTP redirects (max limit of #{config[:redirect_limit]})"
+    end
+
+    response = create_request(uri)
+
+    case response
+    when Net::HTTPSuccess then
+      response
+    when Net::HTTPRedirection then
+      location = response['location']
+      acquire_resource(URI.parse(location), limit - 1)
+    else
+      response.value
+    end
+  end
+
+  def create_request(uri)
+    if uri.nil?
+      if config[:uri]
+        uri = URI.parse(config[:url])
+      else
+        uri = URI::HTTP.build(
+          :host => config[:host],
+          :port => config[:port],
+          :path => config[:path],
+          :query => config[:query]
+        )
+      end
+    end
+
+    http = Net::HTTP.new(uri.host, uri.port)
 
     if config[:ssl]
       http.use_ssl = true
